@@ -1,496 +1,910 @@
+import javax.imageio.ImageIO;
 import javax.swing.*;
+import javax.swing.Timer;
+import javax.swing.table.DefaultTableModel;
 import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.geom.RoundRectangle2D;
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.*;
+import java.util.List;
+import java.util.function.Consumer;
 
-public class MemoryCardGame {
-    private static Map<String, List<HighScore>> highScoresByDifficulty = new HashMap<>();
-    private static String playerName;
+/**
+ * Memory Card Game (improved).
+ *
+ * - One window with screen switching (no more opening/closing JFrames)
+ * - Images are loaded from a relative "images" folder; if an image is missing,
+ *   a colored lettered card is drawn instead, so the game always works
+ * - Flip animation, matched-card highlight, move counter, time bar
+ * - Input lock while two unmatched cards are showing (fixes the 3rd-click bug)
+ * - Different time limits per difficulty
+ * - High scores are saved to highscores.csv and survive restarts
+ *
+ * Optional images (relative to where you run the game):
+ *   images/easy.jpg, images/medium.jpg, images/hard.jpg   -> card backs
+ *   images/easy/1.png ... 2.png                           -> Easy faces
+ *   images/medium/1.png ... 8.png                         -> Medium faces
+ *   images/hard/1.png ... 18.png                          -> Hard faces
+ */
+public class MemoryCardGame extends JFrame {
+    private static final String MENU = "menu";
+    private static final String DIFFICULTY = "difficulty";
+    private static final String GAME = "game";
+
+    private final CardLayout screens = new CardLayout();
+    private final JPanel root = new JPanel(screens);
+    private final HighScoreManager scores = new HighScoreManager(Paths.get("highscores.csv"));
+    private final MenuPanel menuPanel;
+    private final DifficultyPanel difficultyPanel;
+    private GamePanel gamePanel;
+    private String playerName = "";
 
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> {
-            MainMenu mainMenu = new MainMenu();
-            mainMenu.setVisible(true);
-        });
+        System.setProperty("awt.useSystemAAFontSettings", "on");
+        SwingUtilities.invokeLater(() -> new MemoryCardGame().setVisible(true));
     }
 
-    public static void setPlayerName(String name) {
-        playerName = name;
-    }
-
-    public static String getPlayerName() {
-        return playerName;
-    }
-
-    public static void addHighScore(String difficulty, HighScore highScore) {
-        if (!highScoresByDifficulty.containsKey(difficulty)) {
-            highScoresByDifficulty.put(difficulty, new ArrayList<>());
-        }
-        List<HighScore> highScores = highScoresByDifficulty.get(difficulty);
-        highScores.add(highScore);
-        Collections.sort(highScores);
-        if (highScores.size() > 10) {
-            highScores.remove(highScores.size() - 1);
-        }
-    }
-
-    public static List<HighScore> getHighScores(String difficulty) {
-        return highScoresByDifficulty.getOrDefault(difficulty, new ArrayList<>());
-    }
-}
-
-class MainMenu extends JFrame implements ActionListener {
-    private JButton startButton, highScoresButton;
-    private JTextField nameField;
-
-    public MainMenu() {
-        setTitle("Memory Card Game");
-        setSize(400, 300);
+    public MemoryCardGame() {
+        super("Memory Card Game");
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setLocationRelativeTo(null); // Center the window
-        setLayout(new BorderLayout());
-
-        // Create a panel for inputs and buttons
-        JPanel panel = new JPanel();
-        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-        panel.setBackground(Color.WHITE);
-
-        // Add a title label
-        JLabel titleLabel = new JLabel("Memory Card Game");
-        titleLabel.setFont(new Font("Arial", Font.BOLD, 24));
-        titleLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-        panel.add(Box.createVerticalStrut(10));
-        panel.add(titleLabel);
-
-        // Add a name input field
-        JLabel nameLabel = new JLabel("Enter your name:");
-        nameLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-        panel.add(Box.createVerticalStrut(10));
-        panel.add(nameLabel);
-
-        nameField = new JTextField(20);
-        nameField.setMaximumSize(new Dimension(300, 30));
-        panel.add(Box.createVerticalStrut(5));
-        panel.add(nameField);
-
-        // Add the start button
-        startButton = new JButton("Start Game");
-        startButton.setAlignmentX(Component.CENTER_ALIGNMENT);
-        startButton.addActionListener(e -> {
-            String playerName = nameField.getText().trim();
-            if (!playerName.isEmpty()) {
-                MemoryCardGame.setPlayerName(playerName);
-                DifficultySelection difficultySelection = new DifficultySelection();
-                difficultySelection.setVisible(true);
-                dispose(); // Close the main menu window
-            } else {
-                JOptionPane.showMessageDialog(this, "Please enter your name.", "Name Required",
-                        JOptionPane.ERROR_MESSAGE);
-            }
-        });
-        panel.add(Box.createVerticalStrut(15));
-        panel.add(startButton);
-
-        // Add the high scores button
-        highScoresButton = new JButton("High Scores");
-        highScoresButton.setAlignmentX(Component.CENTER_ALIGNMENT);
-        highScoresButton.addActionListener(this);
-        panel.add(Box.createVerticalStrut(10));
-        panel.add(highScoresButton);
-
-        // Add padding around the panel
-        panel.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
-
-        // Add the panel to the frame
-        add(panel, BorderLayout.CENTER);
-
-        // Set the frame visible
-        setVisible(true);
-    }
-
-    @Override
-    public void actionPerformed(ActionEvent e) {
-        if (e.getSource() == highScoresButton) {
-            // Display high scores
-            HighScoresDialog highScoresDialog = new HighScoresDialog(this);
-            highScoresDialog.setVisible(true);
-        }
-    }
-}
-
-class DifficultySelection extends JFrame implements ActionListener {
-    private JButton easyButton, mediumButton, hardButton, homeButton;
-
-    public DifficultySelection() {
-        setTitle("Select Difficulty");
-        setSize(400, 300);
-        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setMinimumSize(new Dimension(520, 620));
+        setSize(640, 720);
         setLocationRelativeTo(null);
-        setLayout(new BorderLayout());
 
-        // Create a panel for buttons
-        JPanel buttonPanel = new JPanel(new GridLayout(4, 1, 10, 10));
-        buttonPanel.setBackground(Color.WHITE);
-        buttonPanel.setBorder(BorderFactory.createEmptyBorder(20, 50, 20, 50));
+        menuPanel = new MenuPanel(this);
+        difficultyPanel = new DifficultyPanel(this);
+        root.add(menuPanel, MENU);
+        root.add(difficultyPanel, DIFFICULTY);
+        setContentPane(root);
 
-        easyButton = createButton("Easy");
-        mediumButton = createButton("Medium");
-        hardButton = createButton("Hard");
-        homeButton = createButton("Home");
-
-        buttonPanel.add(easyButton);
-        buttonPanel.add(mediumButton);
-        buttonPanel.add(hardButton);
-        buttonPanel.add(homeButton);
-
-        add(buttonPanel, BorderLayout.CENTER);
-
-        // Set the frame visible
-        setVisible(true);
+        showMenu();
     }
 
-    private JButton createButton(String text) {
-        JButton button = new JButton(text);
-        button.addActionListener(this);
-        button.setFont(new Font("Arial", Font.BOLD, 18));
-        return button;
+    void showMenu() {
+        stopGame();
+        screens.show(root, MENU);
+        menuPanel.focusName();
+    }
+
+    void showDifficulty() {
+        stopGame();
+        difficultyPanel.refresh();
+        screens.show(root, DIFFICULTY);
+    }
+
+    void startGame(Difficulty difficulty) {
+        stopGame();
+        gamePanel = new GamePanel(this, difficulty);
+        root.add(gamePanel, GAME);
+        screens.show(root, GAME);
+        root.revalidate();
+        root.repaint();
+    }
+
+    private void stopGame() {
+        if (gamePanel != null) {
+            gamePanel.dispose();
+            root.remove(gamePanel);
+            gamePanel = null;
+        }
+    }
+
+    HighScoreManager getScores() { return scores; }
+    String getPlayerName() { return playerName; }
+    void setPlayerName(String name) { playerName = name; }
+}
+
+/* ============================ Settings & helpers ============================ */
+
+enum Difficulty {
+    EASY("Easy", 2, 30),
+    MEDIUM("Medium", 4, 90),
+    HARD("Hard", 6, 180);
+
+    final String label;
+    final int grid;
+    final int seconds;
+
+    Difficulty(String label, int grid, int seconds) {
+        this.label = label;
+        this.grid = grid;
+        this.seconds = seconds;
+    }
+
+    int pairs() { return grid * grid / 2; }
+    String folder() { return label.toLowerCase(Locale.ROOT); }
+}
+
+final class Theme {
+    static final Color BG = new Color(0x1E1B2E);
+    static final Color PANEL = new Color(0x2A2640);
+    static final Color PANEL_LIGHT = new Color(0x3A3558);
+    static final Color ACCENT = new Color(0x7C5CFF);
+    static final Color TEAL = new Color(0x1FA99C);
+    static final Color DANGER = new Color(0xE0486A);
+    static final Color TEXT = new Color(0xF4F2FF);
+    static final Color MUTED = new Color(0xA6A1C2);
+    static final Color MATCHED = new Color(0x2EE6A8);
+
+    static Font font(int style, int size) { return new Font("SansSerif", style, size); }
+
+    private Theme() {}
+}
+
+final class UI {
+    static JLabel label(String text, int style, int size, Color color) {
+        JLabel l = new JLabel(text);
+        l.setFont(Theme.font(style, size));
+        l.setForeground(color);
+        l.setAlignmentX(Component.CENTER_ALIGNMENT);
+        return l;
+    }
+
+    static void fixSize(JComponent c, int w, int h) {
+        Dimension d = new Dimension(w, h);
+        c.setPreferredSize(d);
+        c.setMaximumSize(d);
+        c.setMinimumSize(d);
+        c.setAlignmentX(Component.CENTER_ALIGNMENT);
+    }
+
+    static String clock(int seconds) {
+        return String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60);
+    }
+
+    static String seconds(long millis) {
+        return String.format(Locale.ROOT, "%.1fs", millis / 1000.0);
+    }
+
+    static void drawCentered(Graphics2D g2, String s, Font f, int size) {
+        g2.setFont(f);
+        FontMetrics fm = g2.getFontMetrics();
+        int x = (size - fm.stringWidth(s)) / 2;
+        int y = (size - fm.getHeight()) / 2 + fm.getAscent();
+        g2.drawString(s, x, y);
+    }
+
+    private UI() {}
+}
+
+/** Loads images from disk (relative path) or the classpath, with caching. Returns null if not found. */
+final class Assets {
+    private static final Map<String, BufferedImage> CACHE = new HashMap<>();
+    private static final Set<String> MISSING = new HashSet<>();
+
+    static BufferedImage load(String... paths) {
+        String key = String.join("|", paths);
+        if (CACHE.containsKey(key)) return CACHE.get(key);
+        if (MISSING.contains(key)) return null;
+
+        for (String p : paths) {
+            try {
+                File f = new File(p);
+                if (f.isFile()) {
+                    BufferedImage img = ImageIO.read(f);
+                    if (img != null) { CACHE.put(key, img); return img; }
+                }
+                URL url = MemoryCardGame.class.getResource("/" + p);
+                if (url != null) {
+                    BufferedImage img = ImageIO.read(url);
+                    if (img != null) { CACHE.put(key, img); return img; }
+                }
+            } catch (IOException ex) {
+                System.err.println("Could not read image " + p + ": " + ex.getMessage());
+            }
+        }
+        MISSING.add(key);
+        return null;
+    }
+
+    private Assets() {}
+}
+
+/* ================================ Widgets ================================ */
+
+class RoundedButton extends JButton {
+    private final Color base;
+    private boolean hover;
+
+    RoundedButton(String text, Color base) {
+        super(text);
+        this.base = base;
+        setFont(Theme.font(Font.BOLD, 16));
+        setForeground(Theme.TEXT);
+        setFocusPainted(false);
+        setBorderPainted(false);
+        setContentAreaFilled(false);
+        setOpaque(false);
+        setBorder(BorderFactory.createEmptyBorder(10, 22, 10, 22));
+        setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        addMouseListener(new MouseAdapter() {
+            @Override public void mouseEntered(MouseEvent e) { hover = true; repaint(); }
+            @Override public void mouseExited(MouseEvent e) { hover = false; repaint(); }
+        });
     }
 
     @Override
-    public void actionPerformed(ActionEvent e) {
-        if (e.getSource() == easyButton || e.getSource() == mediumButton || e.getSource() == hardButton) {
-            int gridSize = 2;
-            String difficulty = "";
+    protected void paintComponent(Graphics g) {
+        Graphics2D g2 = (Graphics2D) g.create();
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        Color c = base;
+        if (!isEnabled()) c = base.darker().darker();
+        else if (getModel().isPressed()) c = base.darker();
+        else if (hover) c = lighten(base, 25);
+        g2.setColor(c);
+        g2.fillRoundRect(0, 0, getWidth(), getHeight(), 18, 18);
+        g2.dispose();
+        super.paintComponent(g);
+    }
 
-            if (e.getSource() == easyButton) {
-                gridSize = 2;
-                difficulty = "Easy";
-            } else if (e.getSource() == mediumButton) {
-                gridSize = 4;
-                difficulty = "Medium";
-            } else if (e.getSource() == hardButton) {
-                gridSize = 6;
-                difficulty = "Hard";
+    private static Color lighten(Color c, int amt) {
+        return new Color(Math.min(255, c.getRed() + amt),
+                Math.min(255, c.getGreen() + amt),
+                Math.min(255, c.getBlue() + amt));
+    }
+}
+
+/** A single card, drawn by hand so it scales to any grid size and can animate. */
+class Card extends JComponent {
+    private static final int ARC = 18;
+    private static final int FLIP_MS = 220;
+
+    private final int pairId;
+    private final BufferedImage faceImage;
+    private final BufferedImage backImage;
+    private final Color faceColor;
+    private final String faceText;
+
+    private boolean faceUp;
+    private boolean matched;
+    private boolean showingFront;
+    private boolean hover;
+    private double flipScale = 1.0;
+    private Timer animation;
+
+    Card(int pairId, BufferedImage faceImage, Color faceColor, String faceText,
+         BufferedImage backImage, Consumer<Card> onClick) {
+        this.pairId = pairId;
+        this.faceImage = faceImage;
+        this.faceColor = faceColor;
+        this.faceText = faceText;
+        this.backImage = backImage;
+
+        setPreferredSize(new Dimension(90, 90));
+        setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        addMouseListener(new MouseAdapter() {
+            @Override public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isLeftMouseButton(e)) onClick.accept(Card.this);
             }
+            @Override public void mouseEntered(MouseEvent e) { hover = true; repaint(); }
+            @Override public void mouseExited(MouseEvent e) { hover = false; repaint(); }
+        });
+    }
 
-            MemoryCardGameWindow gameWindow = new MemoryCardGameWindow(MemoryCardGame.getPlayerName(), gridSize, difficulty);
-            gameWindow.setVisible(true);
-            dispose(); // Close the difficulty selection window
-        } else if (e.getSource() == homeButton) {
-            MainMenu mainMenu = new MainMenu();
-            mainMenu.setVisible(true);
-            dispose();
+    int getPairId() { return pairId; }
+    boolean isFaceUp() { return faceUp; }
+    boolean isMatched() { return matched; }
+
+    void setMatched(boolean matched) {
+        this.matched = matched;
+        setCursor(Cursor.getDefaultCursor());
+        repaint();
+    }
+
+    void flip(boolean up) {
+        if (faceUp == up) return;
+        faceUp = up;
+        stopAnimation();
+        final long start = System.nanoTime();
+        animation = new Timer(15, e -> {
+            double t = Math.min(1.0, (System.nanoTime() - start) / 1_000_000.0 / FLIP_MS);
+            if (t < 0.5) {
+                flipScale = 1.0 - t * 2;          // shrink old side
+            } else {
+                showingFront = faceUp;            // swap side at the midpoint
+                flipScale = (t - 0.5) * 2;        // grow new side
+            }
+            if (t >= 1.0) {
+                flipScale = 1.0;
+                ((Timer) e.getSource()).stop();
+            }
+            repaint();
+        });
+        animation.start();
+    }
+
+    void stopAnimation() {
+        if (animation != null) animation.stop();
+        showingFront = faceUp;
+        flipScale = 1.0;
+    }
+
+    @Override
+    protected void paintComponent(Graphics g) {
+        int size = Math.min(getWidth(), getHeight()) - 6;
+        if (size <= 0) return;
+
+        Graphics2D g2 = (Graphics2D) g.create();
+        try {
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+
+            // Center the square card and squash it horizontally for the flip effect
+            g2.translate(getWidth() / 2.0, getHeight() / 2.0);
+            g2.scale(Math.max(0.02, flipScale), 1.0);
+            g2.translate(-size / 2.0, -size / 2.0);
+
+            RoundRectangle2D shape = new RoundRectangle2D.Double(0, 0, size, size, ARC, ARC);
+
+            g2.setColor(new Color(0, 0, 0, 70)); // shadow
+            g2.fill(new RoundRectangle2D.Double(2, 3, size, size, ARC, ARC));
+
+            Shape oldClip = g2.getClip();
+            if (showingFront) paintFront(g2, shape, size);
+            else paintBack(g2, shape, size);
+            g2.setClip(oldClip);
+
+            g2.setStroke(new BasicStroke(matched ? 4f : 2f));
+            g2.setColor(matched ? Theme.MATCHED : new Color(255, 255, 255, 45));
+            g2.draw(new RoundRectangle2D.Double(1, 1, size - 2, size - 2, ARC, ARC));
+        } finally {
+            g2.dispose();
+        }
+    }
+
+    private void paintBack(Graphics2D g2, RoundRectangle2D shape, int size) {
+        if (backImage != null) {
+            g2.clip(shape);
+            g2.drawImage(backImage, 0, 0, size, size, null);
+        } else {
+            g2.setPaint(new GradientPaint(0, 0, Theme.ACCENT, size, size, Theme.ACCENT.darker().darker()));
+            g2.fill(shape);
+            g2.clip(shape);
+            g2.setColor(new Color(255, 255, 255, 25));
+            for (int i = 0; i < size * 2; i += 14) {
+                g2.drawLine(i, 0, i - size, size);
+            }
+            g2.setColor(new Color(255, 255, 255, 210));
+            UI.drawCentered(g2, "?", Theme.font(Font.BOLD, size / 2), size);
+        }
+        if (hover && !faceUp && !matched) {
+            g2.setColor(new Color(255, 255, 255, 35));
+            g2.fill(shape);
+        }
+    }
+
+    private void paintFront(Graphics2D g2, RoundRectangle2D shape, int size) {
+        if (faceImage != null) {
+            g2.setColor(Color.WHITE);
+            g2.fill(shape);
+            g2.clip(shape);
+            int pad = Math.max(4, size / 12);
+            double avail = size - 2.0 * pad;
+            double scale = Math.min(avail / faceImage.getWidth(), avail / faceImage.getHeight());
+            int w = (int) (faceImage.getWidth() * scale);
+            int h = (int) (faceImage.getHeight() * scale);
+            g2.drawImage(faceImage, (size - w) / 2, (size - h) / 2, w, h, null);
+        } else {
+            g2.setColor(faceColor);
+            g2.fill(shape);
+            g2.setColor(Color.WHITE);
+            UI.drawCentered(g2, faceText, Theme.font(Font.BOLD, size / 2), size);
         }
     }
 }
 
+/* ================================ Screens ================================ */
 
-class MemoryCardGameWindow extends JFrame implements ActionListener {
-    private JPanel cardPanel;
-    private ArrayList<JButton> cards;
-    private int gridSize;
+class MenuPanel extends JPanel {
+    private final JTextField nameField = new JTextField(18);
+
+    MenuPanel(MemoryCardGame game) {
+        super(new GridBagLayout());
+        setBackground(Theme.BG);
+
+        JPanel box = new JPanel();
+        box.setLayout(new BoxLayout(box, BoxLayout.Y_AXIS));
+        box.setOpaque(false);
+
+        box.add(UI.label("Memory Card Game", Font.BOLD, 34, Theme.TEXT));
+        box.add(Box.createVerticalStrut(6));
+        box.add(UI.label("Flip. Remember. Match.", Font.PLAIN, 15, Theme.MUTED));
+        box.add(Box.createVerticalStrut(36));
+        box.add(UI.label("Enter your name", Font.PLAIN, 14, Theme.MUTED));
+        box.add(Box.createVerticalStrut(8));
+
+        nameField.setFont(Theme.font(Font.PLAIN, 16));
+        nameField.setForeground(Theme.TEXT);
+        nameField.setBackground(Theme.PANEL);
+        nameField.setCaretColor(Theme.TEXT);
+        nameField.setHorizontalAlignment(JTextField.CENTER);
+        nameField.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(Theme.PANEL_LIGHT, 2),
+                BorderFactory.createEmptyBorder(6, 10, 6, 10)));
+        UI.fixSize(nameField, 260, 42);
+        nameField.addActionListener(e -> submit(game)); // Enter key starts the game
+        box.add(nameField);
+        box.add(Box.createVerticalStrut(24));
+
+        RoundedButton start = new RoundedButton("Start Game", Theme.ACCENT);
+        RoundedButton scores = new RoundedButton("High Scores", Theme.PANEL_LIGHT);
+        RoundedButton exit = new RoundedButton("Exit", Theme.PANEL);
+        for (RoundedButton b : new RoundedButton[]{start, scores, exit}) {
+            UI.fixSize(b, 260, 46);
+            box.add(b);
+            box.add(Box.createVerticalStrut(10));
+        }
+        start.addActionListener(e -> submit(game));
+        scores.addActionListener(e -> new HighScoresDialog(game, game.getScores()).setVisible(true));
+        exit.addActionListener(e -> game.dispose());
+
+        add(box);
+    }
+
+    private void submit(MemoryCardGame game) {
+        String name = nameField.getText().trim();
+        if (name.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Please enter your name.", "Name Required",
+                    JOptionPane.WARNING_MESSAGE);
+            nameField.requestFocusInWindow();
+            return;
+        }
+        if (name.length() > 20) name = name.substring(0, 20);
+        game.setPlayerName(name);
+        game.showDifficulty();
+    }
+
+    void focusName() {
+        SwingUtilities.invokeLater(nameField::requestFocusInWindow);
+    }
+}
+
+class DifficultyPanel extends JPanel {
+    private final MemoryCardGame game;
+    private final JLabel greeting = UI.label("", Font.BOLD, 28, Theme.TEXT);
+    private final Map<Difficulty, JLabel> bestLabels = new EnumMap<>(Difficulty.class);
+
+    DifficultyPanel(MemoryCardGame game) {
+        super(new GridBagLayout());
+        this.game = game;
+        setBackground(Theme.BG);
+
+        JPanel box = new JPanel();
+        box.setLayout(new BoxLayout(box, BoxLayout.Y_AXIS));
+        box.setOpaque(false);
+
+        box.add(greeting);
+        box.add(Box.createVerticalStrut(6));
+        box.add(UI.label("Choose a difficulty", Font.PLAIN, 15, Theme.MUTED));
+        box.add(Box.createVerticalStrut(28));
+
+        Color[] colors = {Theme.TEAL, Theme.ACCENT, Theme.DANGER};
+        for (Difficulty d : Difficulty.values()) {
+            String text = d.label + "   " + d.grid + "x" + d.grid + "   " + UI.clock(d.seconds);
+            RoundedButton b = new RoundedButton(text, colors[d.ordinal()]);
+            UI.fixSize(b, 300, 50);
+            b.addActionListener(e -> game.startGame(d));
+            box.add(b);
+            box.add(Box.createVerticalStrut(4));
+
+            JLabel best = UI.label(" ", Font.PLAIN, 12, Theme.MUTED);
+            bestLabels.put(d, best);
+            box.add(best);
+            box.add(Box.createVerticalStrut(14));
+        }
+
+        RoundedButton home = new RoundedButton("Home", Theme.PANEL_LIGHT);
+        UI.fixSize(home, 300, 44);
+        home.addActionListener(e -> game.showMenu());
+        box.add(Box.createVerticalStrut(8));
+        box.add(home);
+
+        add(box);
+    }
+
+    void refresh() {
+        greeting.setText("Hi, " + game.getPlayerName() + "!");
+        for (Difficulty d : Difficulty.values()) {
+            List<HighScore> list = game.getScores().get(d);
+            bestLabels.get(d).setText(list.isEmpty()
+                    ? "No scores yet"
+                    : "Best: " + list.get(0).name + " - " + UI.seconds(list.get(0).millis)
+                      + ", " + list.get(0).moves + " moves");
+        }
+    }
+}
+
+class GamePanel extends JPanel {
+    private final MemoryCardGame game;
+    private final Difficulty difficulty;
+    private final List<Card> cards = new ArrayList<>();
+
+    private final JLabel timeLabel = UI.label("", Font.BOLD, 15, Theme.TEXT);
+    private final JLabel movesLabel = UI.label("", Font.BOLD, 15, Theme.TEXT);
+    private final JLabel pairsLabel = UI.label("", Font.BOLD, 15, Theme.TEXT);
+    private final JLabel hintLabel = UI.label("The timer starts on your first flip.", Font.PLAIN, 13, Theme.MUTED);
+    private final JProgressBar timeBar;
+    private final Timer countdown;
+    private Timer pendingTimer;
+
+    private Card first;
+    private boolean busy;      // true while a mismatched pair is still showing
+    private boolean started;
+    private boolean finished;
+    private int secondsLeft;
+    private int moves;
     private int matchedPairs;
-    private JButton prevCard;
-    private JButton backButton; // Back button added
-    private JLabel timerLabel; // Timer label added
-    private int secondsLeft = 60; // Initial time in seconds
-    private Timer timer; // Timer object
-    private String playerName;
-    private String difficulty;
-    private String[] revealImagePath;
-    private long startTime;
+    private long startNanos;
 
-    private void setTimerDuration() {
-        switch (difficulty) {
-            case "Easy":
-                secondsLeft = 60;
-                break;
-            case "Medium":
-                secondsLeft = 60;
-                break;
-            case "Hard":
-                secondsLeft = 60;
-                break;
-            default:
-                secondsLeft = 60; // Default to 60 seconds if no difficulty matches
-                break;
-        }
-    }
-
-    public MemoryCardGameWindow(String playerName, int gridSize, String difficulty) {
-        this.playerName = playerName;
-        this.gridSize = gridSize;
+    GamePanel(MemoryCardGame game, Difficulty difficulty) {
+        super(new BorderLayout());
+        this.game = game;
         this.difficulty = difficulty;
+        this.secondsLeft = difficulty.seconds;
+        setBackground(Theme.BG);
 
-        startTime = System.currentTimeMillis();
+        // --- Top bar: Back | title | Restart
+        RoundedButton back = new RoundedButton("Back", Theme.PANEL_LIGHT);
+        RoundedButton restart = new RoundedButton("Restart", Theme.ACCENT);
+        back.setFont(Theme.font(Font.BOLD, 14));
+        restart.setFont(Theme.font(Font.BOLD, 14));
+        back.addActionListener(e -> leave());
+        restart.addActionListener(e -> game.startGame(difficulty));
 
-        setTitle("Memory Card Game");
-        setSize(500, 650);
-        setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setLocationRelativeTo(null); // Center the window
+        JPanel topRow = new JPanel(new BorderLayout());
+        topRow.setOpaque(false);
+        topRow.add(back, BorderLayout.WEST);
+        topRow.add(UI.label(game.getPlayerName() + "  |  " + difficulty.label, Font.BOLD, 17, Theme.TEXT)
+                , BorderLayout.CENTER);
+        ((JLabel) topRow.getComponent(1)).setHorizontalAlignment(SwingConstants.CENTER);
+        topRow.add(restart, BorderLayout.EAST);
 
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER)); // Panel for buttons
-        cardPanel = new JPanel();
-        add(cardPanel, BorderLayout.CENTER);
+        JPanel statsRow = new JPanel(new FlowLayout(FlowLayout.CENTER, 28, 0));
+        statsRow.setOpaque(false);
+        statsRow.add(timeLabel);
+        statsRow.add(movesLabel);
+        statsRow.add(pairsLabel);
 
-        createCards();
-        matchedPairs = 0;
+        JPanel header = new JPanel();
+        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
+        header.setBackground(Theme.PANEL);
+        header.setBorder(BorderFactory.createEmptyBorder(10, 14, 10, 14));
+        header.add(topRow);
+        header.add(Box.createVerticalStrut(10));
+        header.add(statsRow);
 
-        backButton = new JButton("Back"); // Initialize backButton 
-        buttonPanel.add(backButton); // Add backButton to buttonPanel
+        timeBar = new JProgressBar(0, difficulty.seconds);
+        timeBar.setBorderPainted(false);
+        timeBar.setBackground(Theme.PANEL);
+        timeBar.setPreferredSize(new Dimension(10, 6));
 
-        // Set timer duration based on difficulty
-        setTimerDuration();
+        JPanel north = new JPanel(new BorderLayout());
+        north.add(header, BorderLayout.CENTER);
+        north.add(timeBar, BorderLayout.SOUTH);
+        add(north, BorderLayout.NORTH);
 
-        timerLabel = new JLabel("Time left: " + secondsLeft + " seconds"); // Initialize timerLabAel
-        buttonPanel.add(timerLabel); // Add timerLabel to buttonPanel
+        // --- Board
+        JPanel board = new JPanel(new GridLayout(difficulty.grid, difficulty.grid, 8, 8));
+        board.setBackground(Theme.BG);
+        board.setBorder(BorderFactory.createEmptyBorder(16, 16, 8, 16));
+        buildCards();
+        for (Card c : cards) board.add(c);
+        add(board, BorderLayout.CENTER);
 
-        add(buttonPanel, BorderLayout.NORTH); // Add buttonPanel to the frame
+        hintLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        hintLabel.setBorder(BorderFactory.createEmptyBorder(4, 0, 12, 0));
+        add(hintLabel, BorderLayout.SOUTH);
 
-        // Timer to update the time every second
-        timer = new Timer(1000, new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                secondsLeft--;
-                timerLabel.setText("Time left: " + secondsLeft + " seconds");
-                if (secondsLeft == 0) {
-                    timer.stop(); // Stop the timer when time runs out
-                    showGameOverDialog(true);
-                }
-            }
-        });
-
-        backButton.addActionListener(this);
-        timer.start(); // Start the timer
-
-        setVisible(true);
+        countdown = new Timer(1000, e -> tick());
+        updateStats();
     }
 
-    private void createCards() {
-        cards = new ArrayList<>();
-        cardPanel.removeAll();
+    private void buildCards() {
+        String folder = difficulty.folder();
+        BufferedImage back = Assets.load("images/" + folder + ".jpg", "Images/" + folder + ".jpg",
+                "images/" + folder + ".png");
 
-        // Calculate the number of rows and columns for the grid layout
-        int cols = gridSize;
-        int rows = gridSize;
-
-        cardPanel.setLayout(new GridLayout(rows, cols, 0, 0));
-        cardPanel.setBackground(Color.WHITE);
-        cardPanel.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
-
-        ImageIcon backIcon;
-        // Load the back icon based on difficulty level
-        if (difficulty.equals("Easy")) {
-            backIcon = new ImageIcon("images/easy.jpg");
-        } else if (difficulty.equals("Medium")) {
-            backIcon = new ImageIcon("images/medium.jpg");
-        } else { // Hard difficulty
-            backIcon = new ImageIcon("images/hard.jpg");
+        for (int i = 0; i < difficulty.pairs(); i++) {
+            int n = i + 1;
+            BufferedImage face = Assets.load("images/" + folder + "/" + n + ".png",
+                    "Images/" + folder + "/" + n + ".png");
+            Color color = Color.getHSBColor((float) i / difficulty.pairs(), 0.6f, 0.85f);
+            String text = String.valueOf((char) ('A' + i));
+            // Two cards per pair, same pairId
+            cards.add(new Card(i, face, color, text, back, this::onCardClicked));
+            cards.add(new Card(i, face, color, text, back, this::onCardClicked));
         }
-
-        String imageSet;
-        int numImages;
-        if (gridSize == 2) {
-            imageSet = "Images/easy/";
-            numImages = 2;
-        } else if (gridSize == 4) {
-            imageSet = "Images/medium/";
-            numImages = 8;
-        } else { // gridSize == 6
-            imageSet = "Images/hard/";
-            numImages = 18;
-        }
-
-        // Initialize the revealImagePath array with the specified number of images
-        revealImagePath = new String[numImages];
-
-        // Populate the revealImagePath array using a for loop
-        for (int i = 1; i <= numImages; i++) {
-            revealImagePath[i - 1] = String.format("C:\\Users\\USER\\Desktop\\MemoryCardGame\\%s%d.png", imageSet, i);
-        }
-
-        int totalCards = gridSize * gridSize;
-        int pairsCount = totalCards / 2;
-
-
-        for (int i = 0; i < pairsCount; i++) {
-            try {
-                BufferedImage originalImage = ImageIO.read(new File(revealImagePath[i % revealImagePath.length]));
-                ImageIcon scaledIcon = new ImageIcon(originalImage);
-    
-                // Create pairs of cards with the scaled icon
-                JButton card1 = new JButton(backIcon);
-                JButton card2 = new JButton(backIcon);
-
-                card1.setDisabledIcon(scaledIcon);
-                card2.setDisabledIcon(scaledIcon);
-
-    
-                // Set names for matching comparison
-                card1.setName("card" + (i + 1));
-                card2.setName("card" + (i + 1));
-    
-                // Add action listeners
-                card1.addActionListener(this);
-                card2.addActionListener(this);
-    
-                // Add cards to the card list
-                cards.add(card1);
-                cards.add(card2);
-            } catch (IOException ex) {
-                ex.printStackTrace();
-            }
-        }
-
-        // Shuffle the cards for randomness
         Collections.shuffle(cards);
-
-        // Add cards to the card panel
-        for (JButton card : cards) {
-            cardPanel.add(card);
-        }
-
-        cardPanel.revalidate();
-        cardPanel.repaint();
     }
 
-    @Override
-    public void actionPerformed(ActionEvent e) {
-        if (e.getSource() == backButton) {
-            timer.stop();
-            secondsLeft = 60; // Reset the timer to 60 seconds
-    
-            DifficultySelection difficultySelection = new DifficultySelection();
-            difficultySelection.setVisible(true);
-            dispose(); 
+    private void onCardClicked(Card card) {
+        if (busy || finished || card.isFaceUp() || card.isMatched()) return;
+
+        if (!started) {
+            started = true;
+            startNanos = System.nanoTime();
+            countdown.start();
+            hintLabel.setText(" ");
+        }
+
+        card.flip(true);
+
+        if (first == null) {
+            first = card;
             return;
         }
 
-        JButton clickedCard = (JButton) e.getSource();
-        clickedCard.setEnabled(false); // Disable the clicked card to prevent multiple clicks
+        Card second = card;
+        moves++;
 
-        if (prevCard == null) {
-            prevCard = clickedCard;
+        if (first.getPairId() == second.getPairId()) {
+            first.setMatched(true);
+            second.setMatched(true);
+            first = null;
+            matchedPairs++;
+            updateStats();
+            if (matchedPairs == difficulty.pairs()) win();
         } else {
-            if (prevCard.getName().equals(clickedCard.getName())) {
-                // Match found, disable both cards
-                prevCard.setEnabled(false);
-                clickedCard.setEnabled(false);
-                prevCard = null; // Reset the previously clicked card
-                matchedPairs++;
-                if (matchedPairs == gridSize * gridSize / 2) {
-                    timer.stop(); // Stop the timer when the game is completed
-                    showGreatJobDialog(true);
-                }
-            } else {
-                // No match, enable both cards after a short delay
-                Timer delayTimer = new Timer(500, new ActionListener() {
-                    @Override
-                    public void actionPerformed(ActionEvent e) {
-                        prevCard.setEnabled(true);
-                        clickedCard.setEnabled(true);
-                        prevCard = null; // Reset the previously clicked card
-                    }
-                });
-                delayTimer.setRepeats(false);
-                delayTimer.start();
+            busy = true; // block extra clicks until these two flip back
+            updateStats();
+            Card a = first;
+            pendingTimer = new Timer(750, e -> {
+                a.flip(false);
+                second.flip(false);
+                first = null;
+                busy = false;
+            });
+            pendingTimer.setRepeats(false);
+            pendingTimer.start();
+        }
+    }
+
+    private void tick() {
+        secondsLeft--;
+        updateStats();
+        if (secondsLeft <= 0) lose();
+    }
+
+    private void updateStats() {
+        boolean low = secondsLeft <= 10;
+        timeLabel.setText("Time " + UI.clock(Math.max(0, secondsLeft)));
+        timeLabel.setForeground(low ? Theme.DANGER : Theme.TEXT);
+        movesLabel.setText("Moves " + moves);
+        pairsLabel.setText("Pairs " + matchedPairs + "/" + difficulty.pairs());
+        timeBar.setValue(Math.max(0, secondsLeft));
+        timeBar.setForeground(low ? Theme.DANGER : Theme.MATCHED);
+    }
+
+    private void win() {
+        finished = true;
+        countdown.stop();
+        long millis = (System.nanoTime() - startNanos) / 1_000_000;
+        String name = game.getPlayerName();
+        int rank = game.getScores().add(difficulty, new HighScore(name, millis, moves));
+
+        String msg = "Great job, " + name + "!\n\n"
+                + "Time: " + UI.seconds(millis) + "\n"
+                + "Moves: " + moves;
+        if (rank == 1) msg += "\n\nNew best time on " + difficulty.label + "!";
+        else if (rank > 0) msg += "\n\nYou placed #" + rank + " on the " + difficulty.label + " leaderboard.";
+
+        showEndDialogLater("You win!", msg, JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private void lose() {
+        finished = true;
+        countdown.stop();
+        if (pendingTimer != null) pendingTimer.stop();
+        for (Card c : cards) {
+            if (!c.isMatched()) c.flip(true); // reveal the remaining cards
+        }
+        showEndDialogLater("Time's up!",
+                "Time's up, " + game.getPlayerName() + "!\nYou matched "
+                        + matchedPairs + " of " + difficulty.pairs() + " pairs.",
+                JOptionPane.WARNING_MESSAGE);
+    }
+
+    /** Wait for the last flip animation to finish, then show the result. */
+    private void showEndDialogLater(String title, String msg, int type) {
+        Timer t = new Timer(400, e -> {
+            Object[] options = {"Play Again", "Change Difficulty", "Main Menu"};
+            int choice = JOptionPane.showOptionDialog(this, msg, title, JOptionPane.DEFAULT_OPTION,
+                    type, null, options, options[0]);
+            if (choice == 0) game.startGame(difficulty);
+            else if (choice == 1) game.showDifficulty();
+            else if (choice == 2) game.showMenu();
+            // closing the dialog keeps the finished board visible; Back/Restart still work
+        });
+        t.setRepeats(false);
+        t.start();
+    }
+
+    private void leave() {
+        if (started && !finished) {
+            countdown.stop(); // pause while asking
+            int c = JOptionPane.showConfirmDialog(this,
+                    "Leave this game? Your progress will be lost.", "Leave Game",
+                    JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (c != JOptionPane.YES_OPTION) {
+                countdown.start();
+                return;
             }
         }
+        game.showDifficulty();
     }
 
-    private void showGameOverDialog(boolean enableBackButton) {
-        JOptionPane.showMessageDialog(this, "Time's up! You lost.", "Game Over", JOptionPane.INFORMATION_MESSAGE);
-        if (enableBackButton) {
-            DifficultySelection difficultySelection = new DifficultySelection();
-            difficultySelection.setVisible(true);
-            dispose(); // Close the game window
-        }
-    }
-
-    private void showGreatJobDialog(boolean enableBackButton) {
-        long endTime = System.currentTimeMillis();
-        long timeTaken = (endTime - startTime) / 1000; // Convert to seconds
-        String message = "Great job, " + playerName + "! You completed the game in " + timeTaken + " seconds.";
-
-        JOptionPane.showMessageDialog(this, message, "Congratulations!", JOptionPane.INFORMATION_MESSAGE);
-
-        if (enableBackButton) {
-            DifficultySelection difficultySelection = new DifficultySelection();
-            difficultySelection.setVisible(true);
-            dispose();
-
-            // Add high score
-            MemoryCardGame.addHighScore(difficulty, new HighScore(playerName, (int) timeTaken));
-        }
+    /** Stop every timer so nothing keeps running after the screen is gone. */
+    void dispose() {
+        countdown.stop();
+        if (pendingTimer != null) pendingTimer.stop();
+        for (Card c : cards) c.stopAnimation();
     }
 }
 
-class HighScore implements Comparable<HighScore> {
-    private final String playerName;
-    private final int timeTaken;
+/* ============================== High scores ============================== */
 
-    public HighScore(String playerName, int timeTaken) {
-        this.playerName = playerName;
-        this.timeTaken = timeTaken;
-    }
+final class HighScore implements Comparable<HighScore> {
+    final String name;
+    final long millis;
+    final int moves;
 
-    public String getPlayerName() {
-        return playerName;
-    }
-
-    public int getTimeTaken() {
-        return timeTaken;
+    HighScore(String name, long millis, int moves) {
+        this.name = name;
+        this.millis = millis;
+        this.moves = moves;
     }
 
     @Override
     public int compareTo(HighScore other) {
-        // Compare based on time taken (ascending order)
-        return Integer.compare(this.timeTaken, other.timeTaken);
+        int byTime = Long.compare(millis, other.millis);
+        return byTime != 0 ? byTime : Integer.compare(moves, other.moves); // tie-break on moves
+    }
+}
+
+/** Keeps the top 10 per difficulty and saves them to a CSV file. */
+final class HighScoreManager {
+    private static final int MAX = 10;
+    private final Path file;
+    private final Map<Difficulty, List<HighScore>> scores = new EnumMap<>(Difficulty.class);
+
+    HighScoreManager(Path file) {
+        this.file = file;
+        for (Difficulty d : Difficulty.values()) scores.put(d, new ArrayList<>());
+        load();
+    }
+
+    List<HighScore> get(Difficulty d) {
+        return Collections.unmodifiableList(scores.get(d));
+    }
+
+    /** Adds a score and returns its rank (1 = best), or -1 if it didn't make the top 10. */
+    int add(Difficulty d, HighScore score) {
+        List<HighScore> list = scores.get(d);
+        list.add(score);
+        Collections.sort(list);
+        while (list.size() > MAX) list.remove(list.size() - 1);
+        int index = list.indexOf(score);
+        save();
+        return index >= 0 ? index + 1 : -1;
+    }
+
+    void clearAll() {
+        for (List<HighScore> list : scores.values()) list.clear();
+        save();
+    }
+
+    private void load() {
+        if (!Files.exists(file)) return;
+        try {
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                // Format: DIFFICULTY,millis,moves,name  (name last so it may contain commas)
+                String[] parts = line.split(",", 4);
+                if (parts.length < 4) continue;
+                try {
+                    Difficulty d = Difficulty.valueOf(parts[0]);
+                    scores.get(d).add(new HighScore(parts[3],
+                            Long.parseLong(parts[1]), Integer.parseInt(parts[2])));
+                } catch (IllegalArgumentException ignored) {
+                    // skip bad lines instead of crashing
+                }
+            }
+            for (List<HighScore> list : scores.values()) Collections.sort(list);
+        } catch (IOException ex) {
+            System.err.println("Could not load high scores: " + ex.getMessage());
+        }
+    }
+
+    private void save() {
+        List<String> lines = new ArrayList<>();
+        for (Map.Entry<Difficulty, List<HighScore>> e : scores.entrySet()) {
+            for (HighScore s : e.getValue()) {
+                lines.add(e.getKey().name() + "," + s.millis + "," + s.moves + "," + s.name);
+            }
+        }
+        try {
+            Files.write(file, lines, StandardCharsets.UTF_8);
+        } catch (IOException ex) {
+            System.err.println("Could not save high scores: " + ex.getMessage());
+        }
     }
 }
 
 class HighScoresDialog extends JDialog {
-    public HighScoresDialog(JFrame parent) {
-        super(parent, "High Scores", true);
-        setSize(300, 300);
-        setLocationRelativeTo(parent);
-        
-        JPanel panel = new JPanel(new GridLayout(3, 1, 10, 10));
-        panel.setBackground(Color.WHITE);
+    HighScoresDialog(JFrame owner, HighScoreManager scores) {
+        super(owner, "High Scores", true);
+        setSize(460, 400);
+        setLocationRelativeTo(owner);
 
-        for (String difficulty : new String[]{"Easy", "Medium", "Hard"}) {
-            List<HighScore> highScores = MemoryCardGame.getHighScores(difficulty);
-            JTextArea scoresArea = new JTextArea();
-            scoresArea.setEditable(false);
-            scoresArea.setFont(new Font("Arial", Font.PLAIN, 14));
-            scoresArea.append(difficulty + ":\n");
-            for (int i = 0; i < highScores.size(); i++) {
-                HighScore highScore = highScores.get(i);
-                scoresArea.append((i + 1) + ". " + highScore.getPlayerName() + ": " + highScore.getTimeTaken() + " seconds\n");
-            }
-            JScrollPane scrollPane = new JScrollPane(scoresArea);
-            panel.add(scrollPane);
+        JTabbedPane tabs = new JTabbedPane();
+        Map<Difficulty, DefaultTableModel> models = new EnumMap<>(Difficulty.class);
+
+        for (Difficulty d : Difficulty.values()) {
+            DefaultTableModel model = new DefaultTableModel(new Object[]{"#", "Player", "Time", "Moves"}, 0) {
+                @Override public boolean isCellEditable(int row, int col) { return false; }
+            };
+            models.put(d, model);
+
+            JTable table = new JTable(model);
+            table.setRowHeight(26);
+            table.setFont(Theme.font(Font.PLAIN, 14));
+            table.setBackground(Theme.PANEL);
+            table.setForeground(Theme.TEXT);
+            table.setGridColor(Theme.PANEL_LIGHT);
+            table.setSelectionBackground(Theme.ACCENT);
+            table.setSelectionForeground(Theme.TEXT);
+            table.setFillsViewportHeight(true);
+            table.getTableHeader().setReorderingAllowed(false);
+            table.getColumnModel().getColumn(0).setMaxWidth(40);
+
+            JScrollPane scroll = new JScrollPane(table);
+            scroll.getViewport().setBackground(Theme.PANEL);
+            tabs.addTab(d.label, scroll);
         }
 
-        getContentPane().add(panel, BorderLayout.CENTER);
+        Runnable fill = () -> {
+            for (Difficulty d : Difficulty.values()) {
+                DefaultTableModel model = models.get(d);
+                model.setRowCount(0);
+                List<HighScore> list = scores.get(d);
+                for (int i = 0; i < list.size(); i++) {
+                    HighScore s = list.get(i);
+                    model.addRow(new Object[]{i + 1, s.name, UI.seconds(s.millis), s.moves});
+                }
+            }
+        };
+        fill.run();
 
-        JButton closeButton = new JButton("Close");
-        closeButton.setFont(new Font("Arial", Font.PLAIN, 16));
-        closeButton.addActionListener(e -> dispose());
-        
-        // Add padding around the button
-        closeButton.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        RoundedButton clear = new RoundedButton("Clear All", Theme.DANGER);
+        RoundedButton close = new RoundedButton("Close", Theme.ACCENT);
+        clear.setFont(Theme.font(Font.BOLD, 14));
+        close.setFont(Theme.font(Font.BOLD, 14));
+        clear.addActionListener(e -> {
+            int c = JOptionPane.showConfirmDialog(this, "Delete all high scores?", "Clear Scores",
+                    JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (c == JOptionPane.YES_OPTION) {
+                scores.clearAll();
+                fill.run();
+            }
+        });
+        close.addActionListener(e -> dispose());
 
-        getContentPane().add(closeButton, BorderLayout.SOUTH);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 10));
+        buttons.setBackground(Theme.BG);
+        buttons.add(clear);
+        buttons.add(close);
+
+        getContentPane().setBackground(Theme.BG);
+        getContentPane().add(tabs, BorderLayout.CENTER);
+        getContentPane().add(buttons, BorderLayout.SOUTH);
     }
 }
-
